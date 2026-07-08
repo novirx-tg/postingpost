@@ -1,0 +1,20 @@
+# Database
+*.db
+*.sqlite3
+
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Visual Studio Code / IDEs
+.vscode/
+.idea/
+
+# Archives / temp
+*.zip
+github_release/
