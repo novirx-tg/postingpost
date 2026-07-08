@@ -1,0 +1,5 @@
+aiogram>=3.4.0
+apscheduler>=3.10.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+tzlocal>=5.0
