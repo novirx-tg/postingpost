@@ -1,9 +1,20 @@
-# 📢 Posting Post Bot — [@postingdbot](https://t.me/postingdbot)
+<div align="center">
 
-> Многофункциональный бот для публикации постов в Telegram-каналы.  
-> Поддерживает медиафайлы, URL-кнопки с цветовым стилем, реакции-голосования, отложенную публикацию и редактирование уже опубликованных сообщений.
+# 📢 Posting Post Bot
+
+**Многофункциональный Telegram-бот для управления постами в каналах**
+
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python&logoColor=white)](https://python.org)
+[![aiogram](https://img.shields.io/badge/aiogram-3.4%2B-2CA5E0?logo=telegram&logoColor=white)](https://aiogram.dev)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Telegram Bot](https://img.shields.io/badge/Bot-%40postingdbot-2CA5E0?logo=telegram)](https://t.me/postingdbot)
+
+*Медиафайлы · Цветные кнопки · Реакции-голосования · Отложенная публикация · Редактирование постов*
+
+</div>
 
 ---
+
 
 ## ✨ Возможности
 
