@@ -15,6 +15,7 @@ from database import Database
 from handlers.start import get_main_menu_keyboard
 from services.post_service import send_post, build_inline_keyboard
 from services.scheduler_service import SchedulerService
+from services.table_service import convert_markdown_tables_in_text, render_table, parse_markdown_table, extract_text_and_table_from_message
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -26,6 +27,7 @@ class PostCreator(StatesGroup):
     input_buttons = State()
     input_reactions = State()
     input_schedule_time = State()
+    input_table = State()
 
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -94,6 +96,7 @@ async def channel_selected(callback: CallbackQuery, state: FSMContext, db: Datab
 
 # 3. Content received
 @router.message(PostCreator.input_content)
+@router.message(PostCreator.edit_post)
 async def content_received(message: Message, state: FSMContext):
     data = await state.get_data()
     existing_content_type = data.get('content_type')
@@ -104,44 +107,83 @@ async def content_received(message: Message, state: FSMContext):
     media_file_id = None
     text = None
     
-    if message.text:
+    extracted_text, extracted_table = extract_text_and_table_from_message(message)
+    
+    # 1. Media formats check first
+    if message.photo:
+        content_type = 'photo'
+        media_file_id = message.photo[-1].file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+    elif message.video:
+        content_type = 'video'
+        media_file_id = message.video.file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+    elif message.document:
+        content_type = 'document'
+        media_file_id = message.document.file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+    elif message.animation:
+        content_type = 'animation'
+        media_file_id = message.animation.file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+    elif message.audio:
+        content_type = 'audio'
+        media_file_id = message.audio.file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+    elif message.voice:
+        content_type = 'voice'
+        media_file_id = message.voice.file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+    elif message.video_note:
+        content_type = 'video_note'
+        media_file_id = message.video_note.file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+    elif message.sticker:
+        content_type = 'sticker'
+        media_file_id = message.sticker.file_id
+        text = extracted_text or existing_text
+    elif getattr(message, 'paid_media', None):
+        pm = message.paid_media
+        if hasattr(pm, 'photos') and pm.photos:
+            content_type = 'photo'
+            media_file_id = pm.photos[-1].file_id
+        elif hasattr(pm, 'videos') and pm.videos:
+            content_type = 'video'
+            media_file_id = pm.videos[-1].file_id
+        text = message.html_text if message.html_text else (extracted_text or existing_text)
+
+    # 2. Interactive / Specialty types (Polls, Locations, Contacts, Games, Dice)
+    elif message.poll:
+        content_type = 'text'
+        poll = message.poll
+        options_text = "\n".join([f"🔹 {opt.text}" for opt in poll.options])
+        text = f"📊 <b>{poll.question}</b>\n\n{options_text}"
+    elif message.location or message.venue:
+        content_type = 'text'
+        loc = message.location
+        venue = message.venue
+        if venue:
+            text = f"📍 <b>{venue.title}</b>\n{venue.address}\n<i>(Координаты: {loc.latitude}, {loc.longitude})</i>"
+        else:
+            text = f"📍 <b>Локация:</b> <code>{loc.latitude}, {loc.longitude}</code>"
+    elif message.contact:
+        content_type = 'text'
+        c = message.contact
+        name = f"{c.first_name} {c.last_name or ''}".strip()
+        text = f"👤 <b>Контакт:</b> {name}\n📞 <code>{c.phone_number}</code>"
+    elif message.dice:
+        content_type = 'text'
+        text = f"🎲 <b>Значение:</b> {message.dice.value}"
+
+    # 3. Text, Rich Messages, and Universal Fallback
+    else:
         if existing_media_file_id and existing_content_type and existing_content_type != 'text':
             content_type = existing_content_type
             media_file_id = existing_media_file_id
         else:
             content_type = 'text'
-        text = message.html_text
-    elif message.photo:
-        content_type = 'photo'
-        media_file_id = message.photo[-1].file_id # Best resolution
-        text = message.html_text if message.html_text else existing_text
-    elif message.video:
-        content_type = 'video'
-        media_file_id = message.video.file_id
-        text = message.html_text if message.html_text else existing_text
-    elif message.document:
-        content_type = 'document'
-        media_file_id = message.document.file_id
-        text = message.html_text if message.html_text else existing_text
-    elif message.audio:
-        content_type = 'audio'
-        media_file_id = message.audio.file_id
-        text = message.html_text if message.html_text else existing_text
-    elif message.voice:
-        content_type = 'voice'
-        media_file_id = message.voice.file_id
-        text = message.html_text if message.html_text else existing_text
-    elif message.animation:
-        content_type = 'animation'
-        media_file_id = message.animation.file_id
-        text = message.html_text if message.html_text else existing_text
-    elif message.sticker:
-        content_type = 'sticker'
-        media_file_id = message.sticker.file_id
-        text = existing_text
-    else:
-        await message.answer("❌ Этот формат сообщений не поддерживается. Пожалуйста, отправьте поддерживаемый тип контента.")
-        return
+
+        text = message.html_text if message.html_text else (extracted_text or message.text or message.caption or "")
 
     # Keep existing formatting buttons/reactions if we are just updating media/text
     buttons = data.get('buttons', [])
@@ -157,7 +199,9 @@ async def content_received(message: Message, state: FSMContext):
         html_text=html_text,
         raw_text=raw_text,
         buttons=buttons,
-        reactions=reactions
+        reactions=reactions,
+        from_chat_id=message.chat.id,
+        source_message_id=message.message_id
     )
     
     await state.set_state(PostCreator.edit_post)
@@ -235,6 +279,7 @@ async def show_preview(message: Message, state: FSMContext):
             InlineKeyboardButton(text="🖼️ Изменить медиа", callback_data="post_edit_media")
         ],
         [
+            InlineKeyboardButton(text="📊 Таблица", callback_data="post_edit_table"),
             InlineKeyboardButton(text=f"ℹ️ Разметка: {mode_display}", callback_data="post_toggle_markup")
         ],
         [
@@ -266,8 +311,20 @@ async def show_preview(message: Message, state: FSMContext):
         
     sent_msg = None
     try:
-        if content_type == 'text':
-            sent_msg = await bot.send_message(chat_id, formatted_text, parse_mode=actual_parse_mode, reply_markup=preview_markup)
+        if data.get('from_chat_id') and data.get('source_message_id') and not data.get('text_modified'):
+            try:
+                sent_msg = await bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=data['from_chat_id'],
+                    message_id=data['source_message_id'],
+                    reply_markup=preview_markup
+                )
+            except Exception as ce:
+                logger.warning(f"copy_message preview failed: {ce}")
+
+        if sent_msg is None:
+            if content_type == 'text':
+                sent_msg = await bot.send_message(chat_id, formatted_text, parse_mode=actual_parse_mode, reply_markup=preview_markup)
         elif content_type == 'photo':
             sent_msg = await bot.send_photo(chat_id, media_id, caption=formatted_text, parse_mode=actual_parse_mode, reply_markup=preview_markup)
         elif content_type == 'video':
@@ -278,6 +335,10 @@ async def show_preview(message: Message, state: FSMContext):
             sent_msg = await bot.send_audio(chat_id, media_id, caption=formatted_text, parse_mode=actual_parse_mode, reply_markup=preview_markup)
         elif content_type == 'voice':
             sent_msg = await bot.send_voice(chat_id, media_id, caption=formatted_text, parse_mode=actual_parse_mode, reply_markup=preview_markup)
+        elif content_type == 'video_note':
+            sent_msg = await bot.send_video_note(chat_id, media_id, reply_markup=preview_markup)
+            if text_to_send:
+                await bot.send_message(chat_id, f"📝 <i>Текст под кружком:</i>\n{text_to_send}", parse_mode=actual_parse_mode)
         elif content_type == 'animation':
             sent_msg = await bot.send_animation(chat_id, media_id, caption=formatted_text, parse_mode=actual_parse_mode, reply_markup=preview_markup)
         elif content_type == 'sticker':
@@ -468,6 +529,100 @@ async def edit_media_request(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# 6.1 Table formatting handlers
+@router.callback_query(PostCreator.edit_post, F.data == "post_edit_table")
+@router.callback_query(PostCreator.edit_post, F.data.startswith("post_table_format:"))
+async def handle_table_menu(callback: CallbackQuery, state: FSMContext):
+    if callback.data.startswith("post_table_format:"):
+        style = callback.data.split(":")[1]
+        data = await state.get_data()
+        current_html = data.get('html_text') or data.get('text') or ""
+        current_raw = data.get('raw_text') or data.get('text') or ""
+        
+        new_html = convert_markdown_tables_in_text(current_html, style=style, format_html=True)
+        new_raw = convert_markdown_tables_in_text(current_raw, style=style, format_html=False)
+        
+        await state.update_data(html_text=new_html, raw_text=new_raw, text=new_html)
+        await callback.answer("✅ Таблицы в тексте успешно отформатированы!")
+        await show_preview(callback.message, state)
+        return
+
+    menu_text = (
+        "📊 <b>Управление таблицами в посте</b>\n\n"
+        "Поддерживается как нативный интерфейс таблиц <b>Telegram Bot API 10.1+ (RichBlockTable)</b>, так и классическое моноширинное форматирование.\n\n"
+        "Выберите желаемый стиль таблиц:"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🌐 Нативная TG (RichBlockTable)", callback_data="post_table_format:box"),
+            InlineKeyboardButton(text="📦 Рамка Unicode (┌─┬─┐)", callback_data="post_table_format:box")
+        ],
+        [
+            InlineKeyboardButton(text="📐 ASCII (+---+)", callback_data="post_table_format:ascii"),
+            InlineKeyboardButton(text="➕ Вставить новую таблицу", callback_data="post_table_input")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Назад к превью", callback_data="post_table_back")
+        ]
+    ])
+    await callback.message.answer(menu_text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(PostCreator.edit_post, F.data == "post_table_back")
+async def table_back(callback: CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await show_preview(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(PostCreator.edit_post, F.data == "post_table_input")
+async def request_table_input(callback: CallbackQuery, state: FSMContext):
+    text = (
+        "➕ <b>Добавление таблицы</b>\n\n"
+        "Отправьте данные таблицы в формате Markdown или через разделитель <code>|</code>:\n\n"
+        "<b>Пример:</b>\n"
+        "<code>Товар | Цена | В наличии\n"
+        "Яблоки | 100р | Да\n"
+        "Груши | 150р | Нет</code>\n\n"
+        "Бот сгенерирует красивую моноширинную таблицу и добавит её к вашему тексту."
+    )
+    await callback.message.answer(text, parse_mode="HTML")
+    await state.set_state(PostCreator.input_table)
+    await callback.answer()
+
+
+@router.message(PostCreator.input_table)
+async def process_table_input(message: Message, state: FSMContext):
+    raw_input = message.text.strip()
+    rows = parse_markdown_table(raw_input)
+    if not rows:
+        lines = [l.strip() for l in raw_input.split("\n") if l.strip()]
+        rows = [[cell.strip() for cell in l.split("|")] for l in lines]
+
+    if not rows or len(rows) == 0:
+        await message.answer("❌ <b>Не удалось распознать таблицу.</b> Попробуйте еще раз в формате <code>Столбец 1 | Столбец 2</code>.", parse_mode="HTML")
+        return
+
+    data = await state.get_data()
+    current_html = data.get('html_text') or data.get('text') or ""
+    current_raw = data.get('raw_text') or data.get('text') or ""
+
+    table_simple = render_table(rows, style="simple")
+    new_html = (current_html + "\n\n" + table_simple) if current_html else table_simple
+    new_raw = (current_raw + "\n\n" + table_simple) if current_raw else table_simple
+
+    await state.update_data(
+        html_text=new_html, 
+        raw_text=new_raw, 
+        text=new_html,
+        table_matrix=rows
+    )
+    await message.answer("✅ Таблица успешно добавлена в пост!")
+    await state.set_state(PostCreator.edit_post)
+    await show_preview(message, state)
+
+
 # 7. Publish now
 @router.callback_query(PostCreator.edit_post, F.data == "post_publish")
 async def publish_now(callback: CallbackQuery, state: FSMContext, db: Database, bot: Bot, scheduler_service: SchedulerService):
@@ -482,6 +637,8 @@ async def publish_now(callback: CallbackQuery, state: FSMContext, db: Database, 
     if text_to_save is None:
         text_to_save = data.get('text')
         
+    table_matrix_json = json.dumps(data['table_matrix']) if data.get('table_matrix') else None
+
     if edit_post_id:
         db.update_post(
             edit_post_id,
@@ -492,7 +649,10 @@ async def publish_now(callback: CallbackQuery, state: FSMContext, db: Database, 
             reactions_json=json.dumps(data.get('reactions', [])) if data.get('reactions') else None,
             message_effect_id=data.get('message_effect_id'),
             parse_mode=actual_db_parse_mode,
-            status='draft'
+            status='draft',
+            table_matrix_json=table_matrix_json,
+            from_chat_id=data.get('from_chat_id'),
+            source_message_id=data.get('source_message_id')
         )
         post_id = edit_post_id
         scheduler_service.remove_job(post_id)
@@ -507,7 +667,10 @@ async def publish_now(callback: CallbackQuery, state: FSMContext, db: Database, 
             reactions_json=json.dumps(data.get('reactions', [])) if data.get('reactions') else None,
             message_effect_id=data.get('message_effect_id'),
             parse_mode=actual_db_parse_mode,
-            status='draft'
+            status='draft',
+            table_matrix_json=table_matrix_json,
+            from_chat_id=data.get('from_chat_id'),
+            source_message_id=data.get('source_message_id')
         )
     
     success = await send_post(bot, db, post_id, channel_id)
@@ -596,7 +759,9 @@ async def process_schedule_time(message: Message, state: FSMContext, db: Databas
             message_effect_id=data.get('message_effect_id'),
             parse_mode=actual_db_parse_mode,
             status='scheduled',
-            scheduled_at=scheduled_at_str
+            scheduled_at=scheduled_at_str,
+            from_chat_id=data.get('from_chat_id'),
+            source_message_id=data.get('source_message_id')
         )
         post_id = edit_post_id
     else:
@@ -611,7 +776,9 @@ async def process_schedule_time(message: Message, state: FSMContext, db: Databas
             message_effect_id=data.get('message_effect_id'),
             parse_mode=actual_db_parse_mode,
             status='scheduled',
-            scheduled_at=scheduled_at_str
+            scheduled_at=scheduled_at_str,
+            from_chat_id=data.get('from_chat_id'),
+            source_message_id=data.get('source_message_id')
         )
     
     scheduler_service.add_job(post_id, channel_id, local_dt)

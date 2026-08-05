@@ -102,6 +102,21 @@ class Database:
                 cursor.execute("ALTER TABLE posts ADD COLUMN parse_mode TEXT DEFAULT 'HTML'")
             except sqlite3.OperationalError:
                 pass
+
+            try:
+                cursor.execute("ALTER TABLE posts ADD COLUMN table_matrix_json TEXT")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE posts ADD COLUMN from_chat_id BIGINT")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE posts ADD COLUMN source_message_id BIGINT")
+            except sqlite3.OperationalError:
+                pass
                 
             conn.commit()
 
@@ -160,15 +175,23 @@ class Database:
     def create_post(self, user_id: int, channel_id: int, content_type: str = 'text', 
                     text: str = None, media_file_id: str = None, buttons_json: str = None, 
                     reactions_json: str = None, status: str = 'draft', scheduled_at: str = None,
-                    message_effect_id: str = None, parse_mode: str = 'HTML') -> int:
+                    message_effect_id: str = None, parse_mode: str = 'HTML',
+                    table_matrix_json: str = None, from_chat_id: int = None,
+                    source_message_id: int = None) -> int:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO posts (user_id, channel_id, content_type, text, media_file_id, buttons_json, reactions_json, message_effect_id, parse_mode, status, scheduled_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (user_id, channel_id, content_type, text, media_file_id, buttons_json, reactions_json, message_effect_id, parse_mode, status, scheduled_at))
+                INSERT INTO posts (user_id, channel_id, content_type, text, media_file_id, buttons_json, reactions_json, message_effect_id, parse_mode, status, scheduled_at, table_matrix_json, from_chat_id, source_message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, channel_id, content_type, text, media_file_id, buttons_json, reactions_json, message_effect_id, parse_mode, status, scheduled_at, table_matrix_json, from_chat_id, source_message_id))
             conn.commit()
             return cursor.lastrowid
+
+    ALLOWED_POST_COLUMNS = {
+        'user_id', 'channel_id', 'content_type', 'text', 'media_file_id', 
+        'buttons_json', 'reactions_json', 'message_effect_id', 'parse_mode', 
+        'status', 'scheduled_at', 'table_matrix_json', 'from_chat_id', 'source_message_id'
+    }
 
     def update_post(self, post_id: int, **kwargs):
         if not kwargs:
@@ -176,6 +199,8 @@ class Database:
         fields = []
         values = []
         for key, val in kwargs.items():
+            if key not in self.ALLOWED_POST_COLUMNS:
+                raise ValueError(f"Недопустимое имя столбца: {key}")
             fields.append(f"{key} = ?")
             values.append(val)
         values.append(post_id)

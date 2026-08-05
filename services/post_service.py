@@ -79,6 +79,22 @@ async def send_post(bot: Bot, db: Database, post_id: int, channel_id: int) -> bo
         
         for attempt in (1, 2):
             try:
+                if post.get('from_chat_id') and post.get('source_message_id') and not post.get('text_modified'):
+                    try:
+                        message = await bot.copy_message(
+                            chat_id=channel_id,
+                            from_chat_id=post['from_chat_id'],
+                            message_id=post['source_message_id'],
+                            reply_markup=reply_markup,
+                            **extra_kwargs
+                        )
+                        if message:
+                            db.add_sent_post(channel_id, message.message_id, post_id)
+                            db.update_post(post_id, status='posted')
+                            return True
+                    except Exception as ce:
+                        logger.warning(f"copy_message failed for post {post_id}, falling back to standard send: {ce}")
+
                 if content_type == 'text':
                     message = await bot.send_message(
                         chat_id=channel_id,
@@ -132,6 +148,19 @@ async def send_post(bot: Bot, db: Database, post_id: int, channel_id: int) -> bo
                         reply_markup=reply_markup,
                         **extra_kwargs
                     )
+                elif content_type == 'video_note':
+                    message = await bot.send_video_note(
+                        chat_id=channel_id,
+                        video_note=media_id,
+                        reply_markup=reply_markup,
+                        **extra_kwargs
+                    )
+                    if text:
+                        await bot.send_message(
+                            chat_id=channel_id,
+                            text=text,
+                            parse_mode=parse_mode
+                        )
                 elif content_type == 'animation':
                     message = await bot.send_animation(
                         chat_id=channel_id,
