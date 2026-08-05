@@ -17,4 +17,5 @@ __pycache__/
 
 # Archives / temp
 *.zip
+*.txt
 github_release/
