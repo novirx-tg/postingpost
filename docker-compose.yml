@@ -1,0 +1,9 @@
+﻿services:
+  postingpost:
+    build: .
+    container_name: postingpost_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./posting_bot.db:/app/posting_bot.db
