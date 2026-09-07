@@ -9,6 +9,31 @@ from handlers.start import get_main_menu_keyboard
 
 router = Router()
 
+def make_channel_admin_rights(**overrides) -> ChatAdministratorRights:
+    """
+    Dynamically constructs ChatAdministratorRights guaranteeing all required fields
+    (such as can_send_welcome_messages, can_post_stories, can_manage_topics, etc.)
+    are satisfied across any version of aiogram / Telegram Bot API.
+    """
+    data = {}
+    if hasattr(ChatAdministratorRights, "model_fields"):
+        data = {field_name: False for field_name in ChatAdministratorRights.model_fields}
+    elif hasattr(ChatAdministratorRights, "__fields__"):
+        data = {field_name: False for field_name in ChatAdministratorRights.__fields__}
+
+    data.update({
+        "is_anonymous": False,
+        "can_manage_chat": True,
+        "can_post_messages": True,
+        "can_edit_messages": True,
+        "can_delete_messages": True,
+    })
+    for k, v in overrides.items():
+        data[k] = v
+
+    return ChatAdministratorRights(**data)
+
+
 def get_channels_keyboard() -> ReplyKeyboardMarkup:
     # Button to request a channel chat
     btn = KeyboardButton(
@@ -16,36 +41,8 @@ def get_channels_keyboard() -> ReplyKeyboardMarkup:
         request_chat=KeyboardButtonRequestChat(
             request_id=1001,
             chat_is_channel=True,
-            user_administrator_rights=ChatAdministratorRights(
-                is_anonymous=False,
-                can_manage_chat=True,
-                can_post_messages=True,
-                can_edit_messages=True,
-                can_delete_messages=True,
-                can_manage_video_chats=False,
-                can_restrict_members=False,
-                can_promote_members=False,
-                can_change_info=False,
-                can_invite_users=False,
-                can_post_stories=False,
-                can_edit_stories=False,
-                can_delete_stories=False
-            ),
-            bot_administrator_rights=ChatAdministratorRights(
-                is_anonymous=False,
-                can_manage_chat=True,
-                can_post_messages=True,
-                can_edit_messages=True,
-                can_delete_messages=True,
-                can_manage_video_chats=False,
-                can_restrict_members=False,
-                can_promote_members=False,
-                can_change_info=False,
-                can_invite_users=False,
-                can_post_stories=False,
-                can_edit_stories=False,
-                can_delete_stories=False
-            ),
+            user_administrator_rights=make_channel_admin_rights(),
+            bot_administrator_rights=make_channel_admin_rights(),
             bot_is_member=True,
             request_title=True,
             request_username=True
