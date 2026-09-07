@@ -58,7 +58,7 @@ def get_channels_keyboard() -> ReplyKeyboardMarkup:
 @router.message(F.text == "📢 Мои каналы")
 async def show_channels_list(message: Message, db: Database):
     user_id = message.from_user.id
-    channels = db.get_channels_by_user(user_id)
+    channels = await db.get_channels_by_user(user_id)
     
     # Always update reply keyboard when entering channels section
     await message.answer("📢 Управление каналами:", reply_markup=get_channels_keyboard())
@@ -119,7 +119,7 @@ async def handle_chat_shared(message: Message, bot: Bot, db: Database):
             
         # Get up-to-date channel info
         chat = await bot.get_chat(channel_id)
-        db.add_channel(channel_id, chat.title or "Channel", chat.username or "", user_id)
+        await db.add_channel(channel_id, chat.title or "Channel", chat.username or "", user_id)
         
         await message.answer(
             f"✅ <b>Канал успешно подключен!</b>\n\n"
@@ -146,7 +146,7 @@ async def view_channel_details(callback: CallbackQuery, db: Database, bot: Bot):
     user_id = callback.from_user.id
     
     # Verify user has access to this channel in our DB
-    user_channels = db.get_channels_by_user(user_id)
+    user_channels = await db.get_channels_by_user(user_id)
     channel = next((c for c in user_channels if c['channel_id'] == channel_id), None)
     
     if not channel:
@@ -180,7 +180,7 @@ async def view_channel_details(callback: CallbackQuery, db: Database, bot: Bot):
 @router.callback_query(F.data == "chan_list")
 async def back_to_channels_list(callback: CallbackQuery, db: Database):
     user_id = callback.from_user.id
-    channels = db.get_channels_by_user(user_id)
+    channels = await db.get_channels_by_user(user_id)
     
     if not channels:
         text = "📢 <b>У вас пока нет подключенных каналов.</b>"
@@ -205,11 +205,11 @@ async def delete_channel(callback: CallbackQuery, db: Database):
     channel_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     
-    db.remove_channel(channel_id, user_id)
+    await db.remove_channel(channel_id, user_id)
     await callback.answer("Канал удален из вашего списка.", show_alert=True)
     
     # Refresh list
-    channels = db.get_channels_by_user(user_id)
+    channels = await db.get_channels_by_user(user_id)
     if not channels:
         await callback.message.edit_text(
             "📢 <b>У вас пока нет подключенных каналов.</b>",

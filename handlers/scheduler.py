@@ -11,7 +11,7 @@ router = Router()
 @router.message(F.text == "📅 Отложенные посты")
 async def list_scheduled_posts(message: Message, db: Database):
     user_id = message.from_user.id
-    posts = db.get_scheduled_posts_by_user(user_id)
+    posts = await db.get_scheduled_posts_by_user(user_id)
     
     if not posts:
         await message.answer("📅 <b>У вас нет запланированных постов.</b>", parse_mode="HTML")
@@ -41,12 +41,12 @@ async def view_scheduled_post(callback: CallbackQuery, db: Database):
     post_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     
-    post = db.get_post(post_id)
+    post = await db.get_post(post_id)
     if not post or post['user_id'] != user_id or post['status'] != 'scheduled':
         await callback.answer("Пост не найден или уже опубликован.", show_alert=True)
         return
         
-    channels = db.get_channels_by_user(user_id)
+    channels = await db.get_channels_by_user(user_id)
     channel = next((c for c in channels if c['channel_id'] == post['channel_id']), None)
     chan_title = channel['title'] if channel else f"ID: {post['channel_id']}"
     
@@ -74,7 +74,7 @@ async def view_scheduled_post(callback: CallbackQuery, db: Database):
 @router.callback_query(F.data == "sched_list")
 async def back_to_scheduled_list(callback: CallbackQuery, db: Database):
     user_id = callback.from_user.id
-    posts = db.get_scheduled_posts_by_user(user_id)
+    posts = await db.get_scheduled_posts_by_user(user_id)
     
     if not posts:
         await callback.message.edit_text("📅 <b>У вас нет запланированных постов.</b>", parse_mode="HTML")
@@ -106,7 +106,7 @@ async def delete_scheduled_post(callback: CallbackQuery, db: Database, scheduler
     post_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     
-    post = db.get_post(post_id)
+    post = await db.get_post(post_id)
     if not post or post['user_id'] != user_id:
         await callback.answer("Пост не найден.", show_alert=True)
         return
@@ -114,16 +114,13 @@ async def delete_scheduled_post(callback: CallbackQuery, db: Database, scheduler
     # Remove from APScheduler
     scheduler_service.remove_job(post_id)
     
-    # Delete from DB
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM posts WHERE post_id = ?", (post_id,))
-        conn.commit()
+    # Delete from DB cleanly via db method
+    await db.delete_post(post_id)
         
     await callback.answer("Публикация отменена, пост удален.", show_alert=True)
     
     # Refresh list
-    posts = db.get_scheduled_posts_by_user(user_id)
+    posts = await db.get_scheduled_posts_by_user(user_id)
     if not posts:
         await callback.message.edit_text("📅 <b>У вас нет запланированных постов.</b>", parse_mode="HTML")
     else:

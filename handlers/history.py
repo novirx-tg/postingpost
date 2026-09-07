@@ -3,7 +3,11 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, MessageOriginChannel
+from aiogram.types import (
+    Message, ReplyKeyboardMarkup, KeyboardButton, 
+    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, 
+    MessageOriginChannel
+)
 from aiogram.exceptions import TelegramBadRequest
 
 from database import Database
@@ -12,6 +16,7 @@ from handlers.post_creator import parse_buttons
 from services.post_service import build_inline_keyboard
 
 logger = logging.getLogger(__name__)
+
 def get_friendly_error_message(error_str: str) -> str:
     err_lower = error_str.lower()
     if "message_id_invalid" in err_lower or "message to edit not found" in err_lower:
@@ -34,18 +39,7 @@ class EditPostedPost(StatesGroup):
 @router.message(F.text == "📜 История постов")
 async def show_posted_history(message: Message, db: Database):
     user_id = message.from_user.id
-    
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT p.*, c.title as channel_title 
-            FROM posts p
-            JOIN channels c ON p.channel_id = c.channel_id
-            WHERE p.user_id = ? AND p.status = 'posted'
-            ORDER BY p.created_at DESC
-            LIMIT 10
-        """, (user_id,))
-        posts = [dict(row) for row in cursor.fetchall()]
+    posts = await db.get_history_posts(user_id, limit=10)
         
     if not posts:
         await message.answer("📜 <b>У вас пока нет опубликованных постов в истории.</b>", parse_mode="HTML")
@@ -57,7 +51,6 @@ async def show_posted_history(message: Message, db: Database):
         post_id = post['post_id']
         chan_title = post['channel_title']
         post_text = post.get('text') or ""
-        # Create a snippet of the post text
         snippet = post_text[:20] + "..." if len(post_text) > 20 else (post_text or f"Медиа ({post['content_type']})")
         display_name = f"📢 {chan_title}: {snippet}"
         keyboard_rows.append([InlineKeyboardButton(text=display_name, callback_data=f"hist_view:{post_id}")])
@@ -71,12 +64,12 @@ async def view_history_post(callback: CallbackQuery, db: Database):
     post_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     
-    post = db.get_post(post_id)
+    post = await db.get_post(post_id)
     if not post or post['user_id'] != user_id:
         await callback.answer("Пост не найден.")
         return
         
-    channels = db.get_channels_by_user(user_id)
+    channels = await db.get_channels_by_user(user_id)
     channel = next((c for c in channels if c['channel_id'] == post['channel_id']), None)
     chan_title = channel['title'] if channel else f"ID: {post['channel_id']}"
     
@@ -96,26 +89,49 @@ async def view_history_post(callback: CallbackQuery, db: Database):
             InlineKeyboardButton(text="📝 Изменить текст на канале", callback_data=f"hist_edit_txt:{post_id}"),
             InlineKeyboardButton(text="🔗 Изменить кнопки на канале", callback_data=f"hist_edit_btn:{post_id}")
         ],
+        [
+            InlineKeyboardButton(text="🧹 Очистить реакции на канале", callback_data=f"hist_clear_react:{post_id}")
+        ],
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="hist_list")]
     ])
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
 
 
+@router.callback_query(F.data.startswith("hist_clear_react:"))
+async def clear_channel_reactions(callback: CallbackQuery, db: Database, bot: Bot):
+    post_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+    
+    post = await db.get_post(post_id)
+    if not post or post['user_id'] != user_id:
+        await callback.answer("Пост не найден.")
+        return
+        
+    channel_id = post['channel_id']
+    sent_posts = await db.get_sent_messages_by_post_id(post_id)
+    if not sent_posts:
+        await callback.answer("Сообщение поста на канале не найдено.", show_alert=True)
+        return
+        
+    cleared = 0
+    for sp in sent_posts:
+        try:
+            await bot.delete_all_message_reactions(chat_id=channel_id, message_id=sp['message_id'])
+            cleared += 1
+        except Exception as e:
+            logger.warning(f"Failed to clear reactions on msg {sp['message_id']} in channel {channel_id}: {e}")
+            
+    if cleared > 0:
+        await callback.answer("🧹 Реакции на сообщении в канале успешно очищены!", show_alert=True)
+    else:
+        await callback.answer("Не удалось очистить реакции (убедитесь, что бот является администратором канала).", show_alert=True)
+
+
 @router.callback_query(F.data == "hist_list")
 async def back_to_history_list(callback: CallbackQuery, db: Database):
     user_id = callback.from_user.id
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT p.*, c.title as channel_title 
-            FROM posts p
-            JOIN channels c ON p.channel_id = c.channel_id
-            WHERE p.user_id = ? AND p.status = 'posted'
-            ORDER BY p.created_at DESC
-            LIMIT 10
-        """, (user_id,))
-        posts = [dict(row) for row in cursor.fetchall()]
+    posts = await db.get_history_posts(user_id, limit=10)
         
     if not posts:
         await callback.message.edit_text("📜 <b>У вас пока нет опубликованных постов в истории.</b>", parse_mode="HTML")
@@ -160,7 +176,9 @@ async def request_new_buttons(callback: CallbackQuery, state: FSMContext):
     
     text = (
         "🔗 <b>Изменение URL-кнопок на канале</b>\n\n"
-        "Отправьте новые кнопки в формате: <code>Текст кнопки - ссылка</code>.\n"
+        "Отправьте новые кнопки в формате:\n"
+        "• URL: <code>Текст кнопки - ссылка</code>\n"
+        "• Копирование: <code>copy:Текст кнопки:Текст для копирования</code>\n"
         "Каждая строка — новый ряд, разделитель кнопок в одном ряду — <code>|</code>.\n\n"
         "Отправьте <code>none</code> для удаления кнопок."
     )
@@ -180,14 +198,11 @@ async def process_new_text(message: Message, state: FSMContext, db: Database, bo
     post_id = data['edit_post_id']
     
     # Update text in DB
-    db.update_post(post_id, text=new_text)
+    await db.update_post(post_id, text=new_text)
     
     # Get post & sent mapping
-    post = db.get_post(post_id)
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT channel_id, message_id FROM sent_posts WHERE post_id = ?", (post_id,))
-        sent_messages = cursor.fetchall()
+    post = await db.get_post(post_id)
+    sent_messages = await db.get_sent_messages_by_post_id(post_id)
         
     if not sent_messages:
         await message.answer("❌ Ошибка: В базе данных не найдены привязанные сообщения для этого поста.", reply_markup=get_main_menu_keyboard())
@@ -197,11 +212,11 @@ async def process_new_text(message: Message, state: FSMContext, db: Database, bo
     success_count = 0
     fail_errors = []
     
-    markup = build_inline_keyboard(post, db)
+    markup = await build_inline_keyboard(post, db)
     
     for row in sent_messages:
-        channel_id = row[0]
-        message_id = row[1]
+        channel_id = row['channel_id']
+        message_id = row['message_id']
         try:
             if post['content_type'] == 'text':
                 await bot.edit_message_text(
@@ -263,14 +278,11 @@ async def process_new_buttons(message: Message, state: FSMContext, db: Database,
             buttons_json = json.dumps(buttons)
             
         # Update buttons in DB
-        db.update_post(post_id, buttons_json=buttons_json)
+        await db.update_post(post_id, buttons_json=buttons_json)
         
         # Get post & sent messages
-        post = db.get_post(post_id)
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT channel_id, message_id FROM sent_posts WHERE post_id = ?", (post_id,))
-            sent_messages = cursor.fetchall()
+        post = await db.get_post(post_id)
+        sent_messages = await db.get_sent_messages_by_post_id(post_id)
             
         if not sent_messages:
             await message.answer("❌ Ошибка: В базе данных не найдены привязанные сообщения для этого поста.", reply_markup=get_main_menu_keyboard())
@@ -280,11 +292,11 @@ async def process_new_buttons(message: Message, state: FSMContext, db: Database,
         success_count = 0
         fail_errors = []
         
-        markup = build_inline_keyboard(post, db)
+        markup = await build_inline_keyboard(post, db)
         
         for row in sent_messages:
-            channel_id = row[0]
-            message_id = row[1]
+            channel_id = row['channel_id']
+            message_id = row['message_id']
             try:
                 await bot.edit_message_reply_markup(
                     chat_id=channel_id,
@@ -319,7 +331,7 @@ async def process_new_buttons(message: Message, state: FSMContext, db: Database,
         await message.answer(f"❌ <b>Ошибка в формате кнопок:</b>\n{e}\n\nПопробуйте еще раз или отправьте <code>none</code>.", parse_mode="HTML")
 
 
-# 11. Forwarded post handler (Auto-registration and direct editing)
+# Forwarded post handler (Auto-registration and direct editing)
 @router.message(F.forward_origin)
 async def handle_forwarded_post(message: Message, bot: Bot, db: Database):
     user_id = message.from_user.id
@@ -338,33 +350,31 @@ async def handle_forwarded_post(message: Message, bot: Bot, db: Database):
         if member.status not in ('administrator', 'creator'):
             await message.answer("❌ Вы должны быть администратором в этом канале для редактирования постов.")
             return
-    except Exception as e:
+    except Exception:
         await message.answer("❌ Бот не может получить доступ к этому каналу. Убедитесь, что бот добавлен в канал как администратор.")
         return
 
     # 2. Make sure channel is registered in DB (auto-register if not)
-    user_channels = db.get_channels_by_user(user_id)
+    user_channels = await db.get_channels_by_user(user_id)
     channel_linked = next((c for c in user_channels if c['channel_id'] == channel_id), None)
     
     if not channel_linked:
         try:
             chat = await bot.get_chat(channel_id)
-            db.add_channel(channel_id, chat.title or "Channel", chat.username or "", user_id)
+            await db.add_channel(channel_id, chat.title or "Channel", chat.username or "", user_id)
             await message.answer(f"📢 Канал «{chat.title}» был автоматически подключен к вашему аккаунту!")
         except Exception:
-            db.add_channel(channel_id, "Channel", "", user_id)
+            await db.add_channel(channel_id, "Channel", "", user_id)
             await message.answer("📢 Канал был автоматически подключен к вашему аккаунту!")
 
     # 3. Check if we already have this post in DB
-    post = db.get_post_by_sent_msg(channel_id, message_id)
+    post = await db.get_post_by_sent_msg(channel_id, message_id)
     
     if not post:
-        # Create a new post record so we can edit it
         content_type = None
         media_file_id = None
         text = None
         
-        # Determine content type
         if message.text:
             content_type = 'text'
             text = message.html_text
@@ -399,7 +409,7 @@ async def handle_forwarded_post(message: Message, bot: Bot, db: Database):
             await message.answer("❌ Этот формат сообщений не поддерживается для редактирования.")
             return
 
-        post_id = db.create_post(
+        post_id = await db.create_post(
             user_id=user_id,
             channel_id=channel_id,
             content_type=content_type,
@@ -408,8 +418,8 @@ async def handle_forwarded_post(message: Message, bot: Bot, db: Database):
             status='posted'
         )
         # Link sent post
-        db.add_sent_post(channel_id, message_id, post_id)
-        post = db.get_post(post_id)
+        await db.add_sent_post(channel_id, message_id, post_id)
+        post = await db.get_post(post_id)
     else:
         post_id = post['post_id']
 

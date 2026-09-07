@@ -56,6 +56,13 @@ def render_table(rows: List[List[str]], style: str = "box") -> str:
                 lines.append(top_bot)
         lines.append(top_bot)
 
+    elif style == "compact":
+        for r_idx, row in enumerate(normalized_rows):
+            row_str = " | ".join(cell.strip().ljust(col_widths[i]) for i, cell in enumerate(row))
+            lines.append(row_str)
+            if r_idx == 0 and len(normalized_rows) > 1:
+                lines.append("-+-".join("-" * (col_widths[i] + 2) for i in range(max_cols)))
+
     else:  # simple style
         for r_idx, row in enumerate(normalized_rows):
             row_str = "  ".join(cell.strip().ljust(col_widths[i]) for i, cell in enumerate(row))
@@ -125,7 +132,7 @@ def convert_markdown_tables_in_text(text: str, style: str = "box", format_html: 
     return table_block_pattern.sub(replace_table, text)
 
 
-def create_tg_rich_table_payload(rows: List[List[str]], is_bordered: bool = True, is_striped: bool = True) -> dict:
+def create_tg_rich_table_payload(rows: List[List[str]], is_bordered: bool = True, is_striped: bool = True, is_compact: bool = False) -> dict:
     """
     Creates Telegram Bot API 10.1+ InputRichBlockTable block structure for native tables.
     """
@@ -140,6 +147,7 @@ def create_tg_rich_table_payload(rows: List[List[str]], is_bordered: bool = True
         "type": "table",
         "is_bordered": is_bordered,
         "is_striped": is_striped,
+        "is_compact": is_compact,
         "cells": table_cells
     }
 

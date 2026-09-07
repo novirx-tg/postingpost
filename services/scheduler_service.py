@@ -20,7 +20,7 @@ class SchedulerService:
 
     async def _load_pending_jobs(self):
         # Fetch all scheduled posts
-        scheduled_posts = self.db.get_posts_by_status('scheduled')
+        scheduled_posts = await self.db.get_posts_by_status('scheduled')
         logger.info(f"Loading scheduled posts. Found: {len(scheduled_posts)}")
         now = datetime.now()
         for post in scheduled_posts:

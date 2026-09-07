@@ -37,6 +37,8 @@ async def main():
 
     # Initialize database
     db = Database(DATABASE_PATH)
+    await db.connect()
+    await db.init_db()
     logger.info("Database initialized successfully.")
 
     # Initialize bot and dispatcher
@@ -74,7 +76,8 @@ async def main():
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
-        logger.info("Bot session closed.")
+        await db.close()
+        logger.info("Bot session and database connection closed.")
 
 if __name__ == "__main__":
     try:
