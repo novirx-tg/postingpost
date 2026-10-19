@@ -26,6 +26,8 @@ class PostCreator(StatesGroup):
     select_channel = State()
     input_content = State()
     edit_post = State()
+    edit_text = State()
+    edit_media = State()
     input_buttons = State()
     input_reactions = State()
     input_schedule_time = State()
@@ -36,9 +38,13 @@ class PostCreator(StatesGroup):
 
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Отменить создание")]],
+        keyboard=[
+            [KeyboardButton(text="👀 Предпросмотр поста")],
+            [KeyboardButton(text="❌ Отменить создание")]
+        ],
         resize_keyboard=True
     )
+
 
 # 1. Start post creation
 @router.message(F.text == "✍️ Создать пост")
@@ -100,6 +106,19 @@ async def channel_selected(callback: CallbackQuery, state: FSMContext, db: Datab
 
 
 # 3. Content received
+@router.message(F.text == "👀 Предпросмотр поста")
+async def preview_button_pressed(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if not current_state:
+        await message.answer("Создание поста не активно. Нажмите «✍️ Создать пост».")
+        return
+    data = await state.get_data()
+    if not data.get('channel_id'):
+        await message.answer("Сначала выберите канал через «✍️ Создать пост».")
+        return
+    await show_preview(message, state)
+
+
 @router.message(PostCreator.input_content)
 @router.message(PostCreator.edit_post)
 async def content_received(message: Message, state: FSMContext):
@@ -107,53 +126,74 @@ async def content_received(message: Message, state: FSMContext):
     existing_content_type = data.get('content_type')
     existing_media_file_id = data.get('media_file_id')
     existing_text = data.get('text')
-    album_media = data.get('album_media', [])
+    existing_html_text = data.get('html_text')
+    existing_raw_text = data.get('raw_text')
+    album_media = list(data.get('album_media', []))
     
     content_type = None
     media_file_id = None
     text = None
     
     extracted_text, extracted_table = extract_text_and_table_from_message(message)
+    incoming_has_caption = bool(message.caption or (hasattr(message, 'html_text') and message.html_text and message.caption))
     
     # Check media formats
     if message.photo:
         content_type = 'photo'
         media_file_id = message.photo[-1].file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
+        if incoming_has_caption:
+            text = message.html_text if message.html_text else (message.caption or extracted_text)
+        else:
+            text = existing_text or ""
         if album_media or message.media_group_id:
             album_media.append({'media_type': 'photo', 'file_id': media_file_id, 'has_spoiler': False})
             content_type = 'media_group' if len(album_media) > 1 else 'photo'
     elif message.video:
         content_type = 'video'
         media_file_id = message.video.file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
+        if incoming_has_caption:
+            text = message.html_text if message.html_text else (message.caption or extracted_text)
+        else:
+            text = existing_text or ""
         if album_media or message.media_group_id:
             album_media.append({'media_type': 'video', 'file_id': media_file_id, 'has_spoiler': False})
             content_type = 'media_group' if len(album_media) > 1 else 'video'
     elif message.document:
         content_type = 'document'
         media_file_id = message.document.file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
+        if incoming_has_caption:
+            text = message.html_text if message.html_text else (message.caption or extracted_text)
+        else:
+            text = existing_text or ""
     elif message.animation:
         content_type = 'animation'
         media_file_id = message.animation.file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
+        if incoming_has_caption:
+            text = message.html_text if message.html_text else (message.caption or extracted_text)
+        else:
+            text = existing_text or ""
     elif message.audio:
         content_type = 'audio'
         media_file_id = message.audio.file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
+        if incoming_has_caption:
+            text = message.html_text if message.html_text else (message.caption or extracted_text)
+        else:
+            text = existing_text or ""
     elif message.voice:
         content_type = 'voice'
         media_file_id = message.voice.file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
+        if incoming_has_caption:
+            text = message.html_text if message.html_text else (message.caption or extracted_text)
+        else:
+            text = existing_text or ""
     elif message.video_note:
         content_type = 'video_note'
         media_file_id = message.video_note.file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
+        text = existing_text or ""
     elif message.sticker:
         content_type = 'sticker'
         media_file_id = message.sticker.file_id
-        text = extracted_text or existing_text
+        text = existing_text or ""
     elif getattr(message, 'paid_media', None):
         pm = message.paid_media
         if hasattr(pm, 'photos') and pm.photos:
@@ -162,9 +202,11 @@ async def content_received(message: Message, state: FSMContext):
         elif hasattr(pm, 'videos') and pm.videos:
             content_type = 'video'
             media_file_id = pm.videos[-1].file_id
-        text = message.html_text if message.html_text else (extracted_text or existing_text)
-    poll_data = None
-    if message.poll:
+        if incoming_has_caption:
+            text = message.html_text if message.html_text else (message.caption or extracted_text)
+        else:
+            text = existing_text or ""
+    elif message.poll:
         content_type = 'poll'
         poll = message.poll
         poll_data = {
@@ -196,18 +238,29 @@ async def content_received(message: Message, state: FSMContext):
         content_type = 'text'
         text = f"🎲 <b>Значение:</b> {message.dice.value}"
     else:
-        if existing_media_file_id and existing_content_type and existing_content_type != 'text':
+        # Message has no media -> Pure text message. Preserve any existing media!
+        if (existing_media_file_id and existing_content_type and existing_content_type != 'text') or (album_media and existing_content_type == 'media_group'):
             content_type = existing_content_type
             media_file_id = existing_media_file_id
         else:
             content_type = 'text'
-        text = message.html_text if message.html_text else (extracted_text or message.text or message.caption or "")
+            media_file_id = None
+        text = message.html_text if message.html_text else (extracted_text or message.text or "")
 
     buttons = data.get('buttons', [])
     reactions = data.get('reactions', [])
     
-    html_text = message.html_text if message.html_text else text
-    raw_text = message.text if message.text is not None else (message.caption if message.caption is not None else text)
+    if incoming_has_caption:
+        html_text = message.html_text if message.html_text else text
+        raw_text = message.caption if message.caption is not None else text
+    elif content_type != 'text' and not incoming_has_caption:
+        # Media arrived without caption: preserve existing formatted text
+        html_text = existing_html_text if existing_html_text is not None else text
+        raw_text = existing_raw_text if existing_raw_text is not None else text
+    else:
+        # Pure text message: update text, html_text, raw_text
+        html_text = message.html_text if message.html_text else text
+        raw_text = message.text if message.text is not None else text
     
     update_kwargs = {
         "content_type": content_type,
@@ -225,7 +278,6 @@ async def content_received(message: Message, state: FSMContext):
         update_kwargs["poll_data"] = poll_data
         
     await state.update_data(**update_kwargs)
-    
     await state.set_state(PostCreator.edit_post)
     await show_preview(message, state)
 
@@ -338,6 +390,9 @@ async def show_preview(message: Message, state: FSMContext):
         ])
 
     actions.extend([
+        [
+            InlineKeyboardButton(text="👀 Предпросмотр поста", callback_data="post_refresh_preview")
+        ],
         [
             InlineKeyboardButton(text="📝 Текст", callback_data="post_edit_text"),
             InlineKeyboardButton(text="🖼️ Медиа", callback_data="post_edit_media"),
@@ -848,19 +903,119 @@ def parse_reactions(text: str) -> list:
 
 
 # 6. Change text/media during creation
+@router.callback_query(PostCreator.edit_post, F.data == "post_refresh_preview")
+async def callback_refresh_preview(callback: CallbackQuery, state: FSMContext):
+    await callback.answer("Обновляю предпросмотр...")
+    await show_preview(callback.message, state)
+
+
 @router.callback_query(PostCreator.edit_post, F.data == "post_edit_text")
 async def edit_text_request(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("📝 <b>Отправьте новый текст поста:</b>", parse_mode="HTML")
-    await state.set_state(PostCreator.input_content)
+    await callback.message.answer(
+        "📝 <b>Отправьте новый текст поста:</b>\n"
+        "<i>(Прикреплённые медиафайлы и кнопки сохранятся без изменений)</i>",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(PostCreator.edit_text)
     await callback.answer()
+
+
+@router.message(PostCreator.edit_text)
+async def process_edit_text(message: Message, state: FSMContext):
+    extracted_text, _ = extract_text_and_table_from_message(message)
+    new_text = message.html_text or extracted_text or message.text or message.caption or ""
+    new_raw = message.text or message.caption or new_text
+    
+    await state.update_data(
+        text=new_text,
+        html_text=new_text,
+        raw_text=new_raw
+    )
+    await message.answer("✅ Текст поста обновлён!")
+    await state.set_state(PostCreator.edit_post)
+    await show_preview(message, state)
 
 
 @router.callback_query(PostCreator.edit_post, F.data == "post_edit_media")
 async def edit_media_request(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("🖼️ <b>Отправьте новое медиа (фото, видео, гифку, стикер, аудио, документ):</b>", parse_mode="HTML")
-    await state.update_data(album_media=[])
-    await state.set_state(PostCreator.input_content)
+    await callback.message.answer(
+        "🖼️ <b>Отправьте новое медиа (фото, видео, гифку, стикер, аудио, документ):</b>\n"
+        "<i>(Если отправить без подписи, текущий текст поста сохранится)</i>",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(PostCreator.edit_media)
     await callback.answer()
+
+
+@router.message(PostCreator.edit_media)
+async def process_edit_media(message: Message, state: FSMContext):
+    data = await state.get_data()
+    existing_text = data.get('text')
+    existing_html_text = data.get('html_text')
+    existing_raw_text = data.get('raw_text')
+    
+    content_type = None
+    media_file_id = None
+    
+    if message.photo:
+        content_type = 'photo'
+        media_file_id = message.photo[-1].file_id
+    elif message.video:
+        content_type = 'video'
+        media_file_id = message.video.file_id
+    elif message.document:
+        content_type = 'document'
+        media_file_id = message.document.file_id
+    elif message.animation:
+        content_type = 'animation'
+        media_file_id = message.animation.file_id
+    elif message.audio:
+        content_type = 'audio'
+        media_file_id = message.audio.file_id
+    elif message.voice:
+        content_type = 'voice'
+        media_file_id = message.voice.file_id
+    elif message.video_note:
+        content_type = 'video_note'
+        media_file_id = message.video_note.file_id
+    elif message.sticker:
+        content_type = 'sticker'
+        media_file_id = message.sticker.file_id
+    elif getattr(message, 'paid_media', None):
+        pm = message.paid_media
+        if hasattr(pm, 'photos') and pm.photos:
+            content_type = 'photo'
+            media_file_id = pm.photos[-1].file_id
+        elif hasattr(pm, 'videos') and pm.videos:
+            content_type = 'video'
+            media_file_id = pm.videos[-1].file_id
+    else:
+        await message.answer("⚠️ Пожалуйста, отправьте медиафайл (фото, видео, документ и т.д.) или нажмите «❌ Отменить создание».")
+        return
+
+    update_kwargs = {
+        "content_type": content_type,
+        "media_file_id": media_file_id,
+        "album_media": []  # Single media replaces album
+    }
+    
+    # If media has caption, update text; if not, preserve existing text
+    if message.caption:
+        update_kwargs["text"] = message.html_text or message.caption
+        update_kwargs["html_text"] = message.html_text or message.caption
+        update_kwargs["raw_text"] = message.caption
+    else:
+        update_kwargs["text"] = existing_text or ""
+        update_kwargs["html_text"] = existing_html_text if existing_html_text is not None else (existing_text or "")
+        update_kwargs["raw_text"] = existing_raw_text if existing_raw_text is not None else (existing_text or "")
+        
+    await state.update_data(**update_kwargs)
+    await message.answer("✅ Медиа обновлено!")
+    await state.set_state(PostCreator.edit_post)
+    await show_preview(message, state)
+
 
 
 # 6.1 Table formatting handlers

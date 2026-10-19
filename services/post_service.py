@@ -191,21 +191,6 @@ async def send_post(bot: Bot, db: Database, post_id: int, channel_id: int) -> bo
                     await db.update_post(post_id, status='posted')
                     return True
 
-        # Native copy message fallback check
-        if post.get('from_chat_id') and post.get('source_message_id') and not post.get('text_modified') and star_count == 0 and not show_caption_above_media and not has_spoiler:
-            try:
-                message = await bot.copy_message(
-                    chat_id=channel_id,
-                    from_chat_id=post['from_chat_id'],
-                    message_id=post['source_message_id'],
-                    reply_markup=reply_markup
-                )
-                if message:
-                    await db.add_sent_post(channel_id, message.message_id, post_id)
-                    await db.update_post(post_id, status='posted')
-                    return True
-            except Exception as ce:
-                logger.debug(f"copy_message fallback failed, proceeding to direct send: {ce}")
 
         # Native Polls & Quizzes check (Bot API 9.6 - 10.x)
         if content_type == 'poll' and post.get('poll_data_json'):

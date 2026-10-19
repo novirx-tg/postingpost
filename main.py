@@ -35,10 +35,13 @@ async def main():
         print("="*80 + "\n")
         return
 
+    # Run database migrations
+    from migrations import migrate
+    await migrate(DATABASE_PATH)
+
     # Initialize database
     db = Database(DATABASE_PATH)
     await db.connect()
-    await db.init_db()
     logger.info("Database initialized successfully.")
 
     # Initialize bot and dispatcher
